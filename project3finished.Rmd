@@ -1,0 +1,664 @@
+---
+title: "project3finished"
+author: "Vincent Barletta"
+date: "2023-05-17"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+install.packages("RSQLite",repos = "http://cran.us.r-project.org")
+install.packages("DBI", repos = "http://cran.us.r-project.org")
+install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+library(RSQLite)
+library(DBI)
+library(tidyverse)
+```
+
+```{r}
+db = dbConnect(SQLite(), "stats.stackexchange.db")
+dbListTables(db)
+```
+
+I would like to preface this by saying I have submitted this as an HTML document
+only because I was having LaTeX issues with outputting as a PDF.
+
+ Question 1
+
+1.  How many users are there?
+
+For this question, we will simply count the number of distinct IDs from
+the user table. Typically, databases will have one-to-one correspondence
+between Id and User accounts. We first will check to make sure that
+there is not two of the same ID in the database; this shouldn't occur
+since it is the primary key, but it is good practice to check.
+
+```{r}
+
+dbGetQuery(db, "SELECT Id, COUNT(*) FROM Users GROUP BY Id HAVING COUNT(*) > 1")
+print("This gives no rows, meaning there are no IDs that occur twice in the table.")
+
+dbGetQuery(db, "SELECT COUNT(Distinct Id) FROM Users")
+
+```
+
+There are 321677 unique users registered on the stats stack exchange
+website.
+
+ Question 2
+
+2.  How many users joined since 2020? (Hint: Convert the CreationDate to
+    a year.)
+
+```{r}
+dbGetQuery(db, "SELECT COUNT(Distinct Id) FROM Users
+           WHERE CAST(CreationDate AS DATE) >= 2020")
+
+```
+
+100,796 new users have joined since 2020. We simply cast the
+CreationDate as DATE and only collect records when the year is \>= 2020.
+
+ Question 3
+
+3.  How many users joined each year? Describe this with a plot,
+    commenting on any anomalies.
+
+```{r}
+joined_distribution <- dbGetQuery(db, "SELECT CAST(CreationDate AS DATE) as Year, COUNT(Distinct Id) as Users FROM Users GROUP BY CAST(CreationDate AS DATE)")
+
+ggplot(joined_distribution, aes(x = Year, y = Users)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Distribution of Users Joined Each Year",
+       x = "Year", y = "Number of Users")
+
+```
+
+Here, we can see that 2017 is the peak of all users joining. The
+distribution grows exponentially from the website's creation date in
+2010 up until 2017 before steadily decreasing after. 2023 has very few
+entries as the year is still not finished.
+
+ Question 4
+
+4.  How many different types of posts are there in the Posts table? Get
+    the description of the types from the PostTypeIdMap table. In other
+    words, create a table with the description of each post type and the
+    number of posts of that type, and arrange it from most to least
+    occurrences.
+
+```{r}
+
+post_types <- dbGetQuery(db, "SELECT DISTINCT(PostTypeId) as PostTypeId, i.value as PostTypeName, COUNT(*) FROM Posts as p, PostTypeIdMap as i where i.id = p.PostTypeId GROUP BY PostTypeId ORDER BY COUNT(*) DESC")
+
+post_types
+
+```
+
+Noticeably, there are no posts with PostTypeID = 8, the privilege wiki.
+According to stackexchange's metadata description, these posts are,
+"questions asking us to recommend or find a tool, library or favorite
+off-site resource are off-topic for Stack Overflow as they tend to
+attract opinionated answers and spam. Instead, describe the problem and
+what has been done so far to solve it."
+
+ Question 5
+
+5.  How many posted questions are there?
+
+We can use our table that we created for Question 4. Since Question is
+the most common Post type, we just take the top result from this table.
+
+```{r}
+
+post_types[1,]
+
+```
+
+There are 204,370 posted questions.
+
+ Question 6
+
+6.  What are the top 50 most common tags on questions? For each of the
+    top 50 tags on questions, how many questions are there for each tag.
+
+```{r}
+top50tags <-dbGetQuery(db, "SELECT Tag, COUNT(*) as Count FROM TagPosts GROUP BY Tag ORDER BY COUNT(*) DESC LIMIT 50")
+head(top50tags)
+tail(top50tags)
+top_10_tags = head(top50tags, n = 10)
+
+ggplot(top_10_tags, aes(x = reorder(Tag, -Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Distribution of Most Commonly Used Tags",
+       x = "Tag Name", y = "Number of Posts with Tag") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+
+```
+
+Here, we group each tag by name and calculate how many appearances there
+are of each tag across all questions. The 'R' tag has by far the most
+appearances, with 28495 questions. Regression is not far behind with
+28146 appearances. The rest of the top 6 are machine-learning,
+time-series, probability, and hypothesis-testing. The 45th to 50th
+ranked tags are modeling, references, multivariate-analysis,
+econometrics, interaction, and linear-model.
+
+7.  How many tags are in most questions?
+
+```{r}
+dbSendStatement(db, "CREATE VIEW tag_count10 as SELECT Id, COUNT(Tag) as Count FROM TagPosts GROUP BY Id")
+
+tag_freq <- dbGetQuery(db, "SELECT Count, COUNT(Count) as Frequency FROM tag_count10 GROUP BY Count ORDER BY COUNT(Count) DESC")
+tag_freq
+
+```
+
+Most questions have three tags. A question cannot have more than 5 tags,
+and has to have at least one tag. 90.1% of questions have at least two
+tags.
+
+8.  How many answers are there?
+
+```{r}
+
+post_types[2,]
+
+```
+
+According to the post_types table we created for Question 4, any post
+flagged with PostTypeId = 2 is an answer. By counting these posts, we
+see that there are 197,928 Answers posted.
+
+9.  What's the most recent question (by date-time) in the Posts table? •
+    Find it on the stats.exchange.com Web site and provide the URL. •
+    How would we map a question in the Posts table to the corresponding
+    SO URL?
+
+While we could go through the trouble of converting the CreationDate
+variable into a Date, an easier shortcut is to simply order by the Post
+Id in descending order, as the last ID will be the most recent post.
+
+```{r}
+dbGetQuery(db, "SELECT * FROM Posts WHERE PostTypeId = 1 ORDER BY Id DESC LIMIT 1")
+
+
+```
+
+I went onto stats exchange and looked up the user's profile by Id,
+382402, and found the post on their profile. The url is:
+<https://stats.stackexchange.com/questions/608458/are-there-any-methods-that-combine-mcmc-and-vi>
+
+Questions in the post table follow a relatively simple URL pattern; we
+simply just need to append the Id field onto the basic URL:
+stats.stackexchange.com. We do not even need the post title to fully
+load the page - which is helpful since we would have to replace spaces
+with '-' and decapitalize all characters.
+
+10. For the 10 users who posted the most questions • How many questions
+    did they post? • What are the users' names? • When did they join SO?
+    • What is their Reputation? • What country do they have in their
+    profile?
+
+We will connect the User and Posts table here. First, we will go into
+the Posts table and group by OwnerUserId and count how many Ids there
+are (questions posted). Then, we will connect the Users based on this
+OwnerUserId.
+
+```{r}
+
+users_top_questions <-dbGetQuery(db, "SELECT OwnerUserId, COUNT(Id) as Count FROM Posts WHERE PostTypeId = 1 GROUP BY OwnerUserId ORDER BY COUNT(Id) DESC LIMIT 11")
+users_top_questions = users_top_questions[-1,]
+users_top_questions
+
+dbWriteTable(db, "users_questions", users_top_questions, overwrite = TRUE)
+
+dbGetQuery(db, "SELECT * FROM Users where ID = 77179")
+top_user_info <- dbGetQuery(db, "SELECT u.Id, uq.Count, u.Reputation, u.CreationDate, u.DisplayName, u.Location FROM users_questions uq, Users u WHERE uq.OwnerUserId = u.Id")
+top_user_info
+dbWriteTable(db, "top_user_info", top_user_info, overwrite = TRUE)
+
+
+
+```
+
+The most populous result, by a large margin, is ' ', indicating deleted
+user accounts (according to the main schema webpage). Therefore, we will
+ignore them. We are left with 10 users with the most posted questions.
+Interestingly, our number one result has a Reputation of 1 despite
+posting the most questions. I looked up his profile, and he actually has
+a reputation of 7,110, therefore leaving me wondering why this
+particular piece of data is incorrect.
+
+11. Following from the previous questions, for the 10 users who posted
+    the most questions, how many gold, silver and bronze badges does
+    each of these 10 individuals have?
+
+```{r}
+medal_counts <- dbGetQuery(db, "SELECT Id, DisplayName, MedalName, COUNT(Medal) as Count
+                FROM (SELECT t.Id, t.DisplayName, b.Class as Medal, bc.value as MedalName 
+                From top_user_info t 
+                LEFT JOIN Badges b 
+                on t.Id = b.UserId 
+                INNER JOIN BadgeClassMap bc
+                on b.Class = bc.id)
+                GROUP BY Id, DisplayName, Medal
+                ")
+
+dbWriteTable(db, "medal_counts", medal_counts, overwrite = TRUE)
+
+dbGetQuery(db,"SELECT Id, DisplayName,
+  MAX(CASE WHEN MedalName = 'Gold' THEN Count END) AS Gold,
+  MAX(CASE WHEN MedalName = 'Silver' THEN Count END) AS Silver,
+  MAX(CASE WHEN MedalName = 'Bronze' THEN Count END) AS Bronze
+  FROM medal_counts
+  GROUP BY Id, DisplayName")
+
+
+
+```
+
+15. What question has the most comments associated with it? • how many
+    answers are there for this question?
+
+```{r}
+
+dbGetQuery(db, "SELECT MAX(CommentCount), Id, Title, AnswerCount FROM Posts WHERE PostTypeId = 1")
+
+```
+
+The question with the most comments is QuestionId = 328630, a question
+titled: "Is ridge regression useless in high dimensions (n≪p)? How can
+OLS fail to overfit?" with a total of 54 comments. Surprisingly, it only
+has 6 answers.
+
+16. How many comments are there across all posts? • How many posts have
+    a comment? • What is the distribution of comments per question?
+
+```{r}
+
+dbGetQuery(db, "SELECT SUM(CommentCount) FROM Posts")
+dbGetQuery(db, "SELECT COUNT(Id) FROM Posts WHERE CommentCount > 0 and PostTypeId = 1")
+dbGetQuery(db, "SELECT AVG(CommentCount) FROM Posts WHERE PostTypeId = 1")
+comment_distribution <- dbGetQuery(db, "SELECT Id, CommentCount FROM Posts WHERE PostTypeId = 1 ORDER BY CommentCount DESC")
+
+
+hist(comment_distribution$CommentCount, breaks = 50,
+     main = "Distribution of CommentCounts",
+     xlab = "CommentCounts", ylab = "Frequency")
+
+dbGetQuery(db, "SELECT COUNT(Id) FROM Posts WHERE CommentCount > 0 and PostTypeId = 1")
+
+
+
+```
+
+There are a total of 768,069 comments across all Posts. There are
+229,859 posts that have at least one comment.
+
+On average, a question gets 2.171 comments. As we can see by our
+histogram, a vast majority of the questions do not have any comments at
+all. From our last query, we see that only 128,280 questions out of a
+total 204,370 have comments, meaning that 37.2% of questions have no
+comments at all.
+
+## Required Questions
+
+21. Compute the table that contains • the question, • the name of the
+    user who posted it, • when that user joined, • their location • the
+    date the question was first posted, • the accepted answer, • when
+    the accepted answer was posted • the name of the user who provided
+    the accepted answer.
+
+Although it is more computationally expensive to do, I like to break up
+questions like this into multiple parts. Since the Posts table contains
+both the questions and the answers, I create two separate tables and
+join them together for our final result.
+
+The first table that we create combines Question info with the user who
+posted the question's account information. The second table combines the
+Answer info with the user who posted the answer's account information.
+
+Lastly, we use a left join to combine the two tables. It is important to
+note that this returns all of matches that our question table has with
+the answer table. Therefore, any questions that do not have an accepted
+answer are left out of this table. This question was left ambiguous as
+to if we wanted to include questions without an accepted answer, so we
+will work with the interpretation that we only want questions with
+accepted answers in this table.
+
+There are 201,001 questions posted by non-deleted users, and 66,213 have
+accepted answers.
+
+```{r}
+
+question_info <- dbGetQuery(db, "SELECT p.Id as QuestionID, p.Title as QuestionTitle, u.DisplayName as Username, u.Location, p.CreationDate as QuestionPostedDate, u.CreationDate as UserJoinedDate, AcceptedAnswerId
+           FROM Posts p, Users u 
+           WHERE u.Id = p.OwnerUserId and
+           p.PostTypeId = 1 
+           ")
+nrow(question_info)
+
+
+answer_info <- dbGetQuery(db, "SELECT p.Id as AnswerID, p.Body as Answer, p.CreationDate as AnswerPostedDate, u.DisplayName as AnswerUsername
+           FROM Posts p, Users u
+           WHERE u.Id = p.OwnerUserId and
+           p.PostTypeId = 2")
+
+dbWriteTable(db, "question_info", question_info, overwrite = TRUE)
+dbWriteTable(db, "answer_info", answer_info, overwrite = TRUE)
+
+qna <- dbGetQuery(db, "SELECT q.QuestionTitle, q.Username, q.UserJoinedDate, q.Location, q.QuestionPostedDate,
+          a.Answer, a.AnswerPostedDate, a.AnswerUsername
+          FROM question_info q
+          LEFT JOIN answer_info a
+          WHERE AcceptedAnswerId = AnswerID
+          ")
+head(qna, n = 1)
+nrow(qna)
+
+```
+
+22. Determine the users that have only posted questions and never
+    answered a question? (Compute the table containing the number of
+    questions, number of answers and the user's login name for this
+    group.) How many are there?
+
+My philosophy: go to Posts table, group by OwnerUserId and count the
+total number of posts by PostType = 1. Then, we will do the same by
+PostType = 2. Then, we will look for User IDs that are in the first
+table, but are NOT in the second table. Lastly, we will do an inner join
+with the user table to get their login name; by doing this, we also
+filter out the deleted users with blank user IDs as they do not have an
+associated username.
+
+From this, we find out that there are 76,410 users that have posted a
+question that have not answered a question.
+
+```{r}
+
+question_count <- dbGetQuery(db, "SELECT OwnerUserId, COUNT(*) as QuestionCount FROM Posts WHERE PostTypeId = 1 GROUP BY OwnerUserId  ORDER BY COUNT(*) DESC ")
+
+answer_count <- dbGetQuery(db, "SELECT OwnerUserId, COUNT(*) as AnswerCount FROM Posts WHERE PostTypeId = 2 GROUP BY OwnerUserId  ORDER BY COUNT(*) DESC ")
+
+dbWriteTable(db, "question_count", question_count, overwrite = TRUE)
+dbWriteTable(db, "answer_count", answer_count, overwrite = TRUE)
+
+q22_final <- (dbGetQuery(db, "SELECT q.OwnerUserId, q.QuestionCount, u.DisplayName
+  FROM question_count q
+  LEFT JOIN answer_count a ON q.OwnerUserId = a.OwnerUserId
+  INNER JOIN Users u ON q.OwnerUserId = u.Id
+  WHERE a.OwnerUserId IS NULL"))
+head(q22_final)
+nrow(q22_final)
+
+```
+
+23. Compute the table with information for the 75 users with the most
+    accepted answers. This table should include • the user's display
+    name, • creation date, • location, • the number of badges they have
+    won, -- the names of the badges (as a single string) • the dates of
+    the earliest and most recent accepted answer (as two fields) -- the
+    (unique) tags for all the questions for which they had the accepted
+    answer (as a single string)
+
+This question was super difficult! It really tested the bounds of my
+knowledge. While I initially thought I could do much of this problem in
+one go, I had to go back to my previous method of breaking it up into
+chunks.
+
+I went head-on into this problem simply using the answer_count table at
+first. However, I realized around halfway into this question that I did
+not implement a method to check that the answer was an accepted answer.
+The solution that I decided on involved matching the Id of the answer
+Post to the AcceptedAnswerId of the question by using the ParentId. The
+ParentId provides the question that the answer solves, so we do a
+subquery to find the AAI when for matches between Id and ParentId. This
+gives us our primary table, accepted_answer_count.
+
+The first variables are fairly standard. We use GROUP_CONCAT for the
+badge names as it was suggested on Piazza. For finding the dates, I used
+ChatGPT to help with the conversion formula from String to Date. We use
+this subquery method for ParentId here as well because it was at this
+step that I realized we were not checking for accepted answers.
+
+For the Distinct Tags, we used GROUP_CONCAT as before in conjunction
+with our previous methods. We connect our answers to their associated
+question's tags using the Parent Tag as before.
+
+My final output will only show one row because each row has a lot of tags and 
+badge names.
+
+```{r}
+
+accepted_answer_count <- dbGetQuery(db, "SELECT p.OwnerUserId, COUNT(*) as AnswerCount FROM Posts p
+                          WHERE p.PostTypeId = 2 and p.Id = 
+                          (SELECT AcceptedAnswerId from Posts WHERE Id = p.ParentId)
+                           GROUP BY OwnerUserId  
+                           ORDER BY COUNT(*) DESC ")
+
+dbWriteTable(db, "accepted_answer_count", accepted_answer_count, overwrite = TRUE)
+
+distinct_tags <- dbGetQuery(db, "SELECT p.OwnerUserId, GROUP_CONCAT(DISTINCT t.Tag) as DistinctTags  FROM Posts p
+                          LEFT JOIN TagPosts t on p.ParentId = t.Id
+                          WHERE p.PostTypeId = 2 and p.Id = 
+                          (SELECT AcceptedAnswerId from Posts WHERE Id = p.ParentId)
+                           GROUP BY OwnerUserId  
+                           ORDER BY COUNT(*) DESC ")
+
+dbWriteTable(db, "distinct_tags", distinct_tags, overwrite = TRUE)
+
+
+intermediary <- dbGetQuery(db, "SELECT a.OwnerUserId, a.AnswerCount, u.DisplayName, u.CreationDate, u.Location, COUNT(b.Class) as BadgeCount, GROUP_CONCAT(DISTINCT b.Name) as BadgeNames 
+  FROM accepted_answer_count a
+  LEFT JOIN Badges b on a.OwnerUserId = b.UserId
+  INNER JOIN Users u ON a.OwnerUserId = u.Id
+  GROUP BY OwnerUserId, DisplayName
+  ORDER BY AnswerCount DESC")
+
+dbWriteTable(db, "intermediary", intermediary, overwrite = TRUE)
+
+
+#Conversion format provided to me via ChatGPT; I did not know how to convert it to a date without it simply converting the year (as I did in one of the earlier questions).
+
+creationdates <- dbGetQuery(db, "SELECT u.OwnerUserId,
+       MIN(strftime('%Y-%m-%d %H:%M:%S', p.CreationDate)) AS FirstPostDate,
+       MAX(strftime('%Y-%m-%d %H:%M:%S', p.CreationDate)) AS LastPostDate
+FROM accepted_answer_count u
+LEFT JOIN Posts p ON u.OwnerUserId = p.OwnerUserId
+WHERE PostTypeId = 2 and p.Id = (SELECT AcceptedAnswerId from Posts
+                                WHERE Id = p.ParentId)
+GROUP BY u.OwnerUserId
+ORDER BY u.AnswerCount DESC")
+
+dbWriteTable(db, "creationdates", creationdates, overwrite = TRUE)
+
+
+head(dbGetQuery(db, "SELECT i.*, c.FirstPostDate, c.LastPostDate, d.DistinctTags
+           FROM intermediary i, creationdates c, distinct_tags d
+           WHERE i.OwnerUserId = c.OwnerUserId and i.OwnerUserId = d.OwnerUserId
+           ORDER BY i.AnswerCount DESC
+           LIMIT 75"), n = 1)
+
+```
+
+
+
+24. How many questions received no answers (accepted or unaccepted)? How
+    many questions had no accepted answer?
+
+From number 21, there are 201,001 questions posted by non-deleted users,
+and 66,213 have accepted answers posted by non-deleted users.
+
+According to this calculation, 134,788 questions do not have an accepted
+answer. If we do a direct computation (as we do below), we find that
+136,365 questions do not have an accepted answer. We will use the latter
+number as some data may have been lost in the joining process of the
+previous calculation.
+
+In order to find the questions with no answer at all, we will look for
+matches between Question Id's and the Parent Id's of answers. If there
+are Question IDs that do not have any matching Parent IDs, then that
+question has no unaccepted answers.
+
+```{r}
+
+dbGetQuery(db, "SELECT COUNT(Id) FROM Posts
+           WHERE PostTypeId = 1 AND AcceptedAnswerId = ''
+           AND Id != '' ")
+
+
+ dbGetQuery(db, "SELECT COUNT(Id) FROM Posts 
+              WHERE PostTypeId = 1 AND
+              Id NOT IN (
+                SELECT ParentId FROM Posts
+              )
+            ")
+
+```
+
+There are 66,970 questions that do not have any answers. Alternatively,
+we can also just count posts where AnswerCount = 0.
+
+```{r}
+
+ dbGetQuery(db, "SELECT COUNT(Id) FROM Posts 
+              WHERE PostTypeId = 1 AND
+              AnswerCount = 0
+            ")
+
+```
+
+25. What is the distribution of answers per posted question?
+
+From the last question, we already know that there are many questions
+that are left unanswered. However, many intriguing posts also garner
+multiple answers. Therefore, the average number of answers across all
+posts is just under 1 at 0.9684787.
+
+There is one question that got 153 different answers. I was intrigued,
+and I found that it was a post asking for people's favorite statistic's
+quotes.
+
+If we convert our AnswerCount into a table, we can clearly see the
+distribution laid out. The vast majority are at the frontend of the
+distribution, with either 0, 1, or 2 answers. We use a log-adjust graph
+in order to visibly display all of our data on one graph. It is very
+important to make note of the y-axis as it changes dramatically over a
+small distance. We can see that the first three entries that go above
+the last bar are well above 10,000, and the second bar is very close to
+reaching 100,000.
+
+In comparison, the next most frequent value, 3 answers, occurs only
+7,246 across all posts. This quickly decreases to 2408, 905, 401, 210,
+136, 82, and finally only 62 occurences of a post receiving 10 answers.
+
+```{r}
+
+answer_distribution <- dbGetQuery(db, "SELECT Id, AnswerCount FROM Posts 
+              WHERE PostTypeId = 1 
+              ORDER BY AnswerCount DESC
+            ")
+
+dbGetQuery(db, "SELECT AVG(AnswerCount) FROM Posts WHERE PostTypeId = 1")
+
+
+counts <- table(answer_distribution$AnswerCount)
+counts
+barplot(counts, log = "y", col = "steelblue", main = "Distribution of Answer Count",
+        xlab = "AnswerCounts", ylab = "Frequency (log scale)")
+
+
+```
+
+26. What is the length of time for a question to receive an answer? to
+    obtaining an accepted answer?
+
+First, we create tables with the times for Question creation date and
+answer creation date and join them together based on ParentId and
+Question ID.
+
+In the full table that we create, we have multiple answers submitted for
+each question. We want only the first response for each question. After
+scavenging through StackOverFlow, I found that we can achieve this via
+partitioning by order of AnswerPosted. This ranks each possible
+response. We then can select only the first row.
+
+We find the difference between each time in seconds, and divide by 60 to
+get the difference in minutes in between question posting and the first
+answer being posted.
+
+To get the first accepted answer, it is a bit easier. We simply find the
+entry where the AcceptedAnswerId matches one of the Answer IDs, and
+compute the difference similarly.
+
+```{r}
+
+q_time <- dbGetQuery(db, "SELECT Id as QId, AcceptedAnswerId, (strftime('%Y-%m-%d %H:%M:%S', p.CreationDate)) AS QuestionPosted
+           FROM Posts p
+           WHERE PostTypeId = 1")
+
+a_time <- dbGetQuery(db, "SELECT p.Id as AId, p.ParentId, (strftime('%Y-%m-%d %H:%M:%S', p.CreationDate)) AS AnswerPosted
+           FROM Posts p
+           WHERE PostTypeId = 2
+           ")
+
+dbWriteTable(db, "q_time", q_time, overwrite = TRUE)
+dbWriteTable(db, "a_time", a_time, overwrite = TRUE)
+
+fullresults_qa <- dbGetQuery(db, "SELECT q.*, a.* FROM q_time q, a_time a
+           WHERE a.ParentId = q.QId
+           ")
+
+dbWriteTable(db, "fullresults_qa", fullresults_qa, overwrite = TRUE)
+
+
+first_answer <- dbGetQuery(db, "SELECT QId, AcceptedAnswerId, AId, (strftime('%s', AnswerPosted) - strftime('%s', QuestionPosted))/60 as MinutesUntilFirstAnswer
+FROM (
+    SELECT QId, AcceptedAnswerId, QuestionPosted, AId, ParentId, AnswerPosted,
+           ROW_NUMBER() OVER (PARTITION BY QId ORDER BY AnswerPosted) AS rn
+    FROM fullresults_qa
+) AS sub WHERE rn = 1")
+
+head(first_answer)
+
+first_accepted <- dbGetQuery(db, "SELECT QId, AcceptedAnswerId, (strftime('%s', AnswerPosted) - strftime('%s', QuestionPosted))/60 as MinutesUntilAcceptedAnswer
+           FROM fullresults_qa WHERE AId = AcceptedAnswerId")
+head(first_accepted)
+
+
+
+```
+
+27. How many answers are typically received before the accepted answer?
+
+Here, we will do a self join in order to calculate how many answers are
+typically submitted for each question before the accepted answer is
+received. We check for when AcceptedAnswerId != 0 as these questions do
+not have an accepted answer. We want to find areas when t2.AI is NULL as
+it when it does not equal the accepted answer. We subtract the Count by
+1 as it always has an extra value.
+
+We find that on average, a question has 0.263 answers submitted before
+the submitted answer is provided. This means that typically, the first
+answer is the accepted answer for most questions.
+
+```{r}
+
+numbefore <- dbGetQuery(db, "SELECT t1.QId, (COUNT(*)-1) AS NumRowsBeforeAccepted
+FROM fullresults_qa t1
+LEFT JOIN fullresults_qa t2 ON t1.QId = t2.QId AND t2.AId = t1.AcceptedAnswerId
+WHERE (t2.AId IS NULL OR t2.AId > t1.AId) AND t1.AcceptedAnswerId != 0
+GROUP BY t1.QId;")
+
+dbWriteTable(db, "numbefore", numbefore, overwrite = TRUE)
+dbGetQuery(db, "SELECT AVG(NumRowsBeforeAccepted) FROM numbefore")
+
+```
